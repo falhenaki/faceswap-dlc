@@ -1,6 +1,7 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
-onnxruntime-gpu>=1.19.0
+# Pin for RunPod PyTorch CUDA 11.8 images; 1.19+ often targets CUDA 12 and falls back to CPU.
+onnxruntime-gpu==1.17.1
 onnx>=1.16.0
 numpy>=1.23.5,<2
 opencv-python-headless>=4.8.0

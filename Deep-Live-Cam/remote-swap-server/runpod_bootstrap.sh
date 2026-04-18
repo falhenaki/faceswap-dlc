@@ -17,5 +17,10 @@ if [[ -z "${SWAP_SERVICE_API_KEY:-}" ]]; then
   echo "Set SWAP_SERVICE_API_KEY before starting (same value as DLC_REMOTE_SWAP_API_KEY on your Mac)."
   exit 1
 fi
+command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L || echo "[bootstrap] nvidia-smi not found (GPU driver?)"
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+python3 -m pip install -q -U pip
+python3 -m pip uninstall -y onnxruntime 2>/dev/null || true
 python3 -m pip install -q -r "$ROOT/requirements.txt"
+python3 -c "import onnxruntime as _o; print('[bootstrap] ORT providers', _o.get_available_providers())"
 exec python3 -m uvicorn app:app --host 0.0.0.0 --port "${PORT:-8000}"

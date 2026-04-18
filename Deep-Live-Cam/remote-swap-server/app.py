@@ -36,8 +36,16 @@ def _load_model() -> None:
     model = onnx.load(path)
     graph = model.graph
     _emap = numpy_helper.to_array(graph.initializer[-1])
-    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    _session = ort.InferenceSession(path, providers=providers)
+    so = ort.SessionOptions()
+    so.log_severity_level = 2  # warning; helps diagnose EP load failures in pod logs
+    providers = [
+        (
+            "CUDAExecutionProvider",
+            {"device_id": 0, "arena_extend_strategy": "kSameAsRequested"},
+        ),
+        "CPUExecutionProvider",
+    ]
+    _session = ort.InferenceSession(path, sess_options=so, providers=providers)
     inputs = _session.get_inputs()
     outputs = _session.get_outputs()
     _input_names = [i.name for i in inputs]
