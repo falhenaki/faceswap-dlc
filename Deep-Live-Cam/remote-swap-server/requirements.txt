@@ -1,7 +1,7 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
-# Match CUDA 12.x RunPod PyTorch images (see terraform container_image default).
-onnxruntime-gpu>=1.19.0,<1.22
+# CUDA 11.x wheels; pairs with default PyTorch 2.1 + CUDA 11.8 RunPod image.
+onnxruntime-gpu==1.17.1
 onnx>=1.16.0
 numpy>=1.23.5,<2
 opencv-python-headless>=4.8.0
