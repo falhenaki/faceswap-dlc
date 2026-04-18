@@ -5,6 +5,13 @@
 #   bash runpod_bootstrap.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+PORT="${PORT:-8000}"
+# Avoid "address already in use" when re-running bootstrap on a live pod.
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k "${PORT}/tcp" 2>/dev/null || true
+fi
+pkill -f '[u]vicorn app:app' 2>/dev/null || true
+sleep 1
 MODEL_DIR="${MODEL_DIR:-/workspace/models}"
 mkdir -p "$MODEL_DIR"
 MODEL="${INSWAPPER_MODEL_PATH:-$MODEL_DIR/inswapper_128.onnx}"
@@ -22,8 +29,14 @@ python3 -c "import torch; print('[bootstrap] torch.cuda.is_available=', torch.cu
 for d in /usr/local/cuda/lib64 /usr/local/cuda-12/lib64 /usr/local/cuda-11.8/lib64 /usr/lib/x86_64-linux-gnu; do
   [[ -d "$d" ]] && export LD_LIBRARY_PATH="$d:${LD_LIBRARY_PATH:-}"
 done
+if command -v apt-get >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq || true
+  apt-get install -y -qq libcudnn8 2>/dev/null || true
+  ldconfig 2>/dev/null || true
+fi
 python3 -m pip install -q -U pip
-# CuDNN libs for ONNX Runtime CUDA EP (PyTorch may see GPU while ORT falls back to CPU without these).
+# CuDNN libs for ONNX Runtime CUDA EP (ORT needs libcudnn.so.8 next to CUDA).
 python3 -m pip install -q "nvidia-cudnn-cu11==8.9.7.29" 2>/dev/null || true
 CUDNN_LIB="$(python3 -c "
 try:
@@ -35,7 +48,11 @@ except Exception:
  print('')
 " 2>/dev/null || true)"
 [[ -n "${CUDNN_LIB:-}" ]] && export LD_LIBRARY_PATH="${CUDNN_LIB}:${LD_LIBRARY_PATH:-}"
+_py_site="$(python3 -c 'import site; print(site.getsitepackages()[0])' 2>/dev/null || true)"
+for d in "${_py_site}/nvidia/cudnn/lib" "${_py_site}/nvidia/cudnn/lib/x86_64-linux-gnu"; do
+  [[ -d "$d" ]] && export LD_LIBRARY_PATH="$d:${LD_LIBRARY_PATH:-}"
+done
 python3 -m pip uninstall -y onnxruntime 2>/dev/null || true
 python3 -m pip install -q -r "$ROOT/requirements.txt"
 python3 -c "import onnxruntime as _o; print('[bootstrap] ORT providers', _o.get_available_providers())"
-exec python3 -m uvicorn app:app --host 0.0.0.0 --port "${PORT:-8000}"
+exec python3 -m uvicorn app:app --host 0.0.0.0 --port "${PORT}" --workers 1
