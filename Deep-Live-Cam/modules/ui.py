@@ -14,6 +14,7 @@ import requests
 import tempfile
 import modules.globals
 import modules.metadata
+from modules.virtual_camera import send_frame as _vcam_send, close as _vcam_close
 from modules.face_analyser import (
     get_one_face,
     get_many_faces,
@@ -1211,6 +1212,13 @@ def _processing_thread_func(capture_queue, processed_queue, stop_event):
             except queue.Full:
                 pass
 
+        # Fan-out to the virtual camera (Zoom/Meet pick "OBS Virtual Camera").
+        # No-op if pyvirtualcam is not installed or the backend is unavailable.
+        try:
+            _vcam_send(temp_frame)
+        except Exception:
+            pass
+
 
 def create_webcam_preview(camera_index: int):
     global preview_label, PREVIEW
@@ -1251,6 +1259,10 @@ def create_webcam_preview(camera_index: int):
         cap_thread.join(timeout=2.0)
         proc_thread.join(timeout=2.0)
         cap.release()
+        try:
+            _vcam_close()
+        except Exception:
+            pass
         PREVIEW.withdraw()
 
     # Non-blocking display loop using ROOT.after() — avoids blocking the

@@ -306,8 +306,72 @@ python run.py --execution-provider openvino
 -   Select a source face image.
 -   Click "Live".
 -   Wait for the preview to appear (10-30 seconds).
--   Use a screen capture tool like OBS to stream.
+-   Optional: install OBS once so Zoom/Meet can pick "OBS Virtual Camera" directly (see below).
 -   To change the face, select a new source image.
+
+## Live Pipeline Notes (Apple Silicon)
+
+Measured on M2 / ORT 1.16 with `--execution-provider coreml`:
+
+| Stage | Model | Latency (p50) | FPS |
+|---|---|---|---|
+| Face swap | `inswapper_128.onnx` (CoreML) | ~85 ms | ~12 |
+| Face enhance (fast) | `GPEN-BFR-256.onnx` (CPU) | ~95 ms | ~10 |
+| Face enhance (quality) | `gfpgan-1024.onnx` | ~1900 ms | ~0.5 |
+
+Guidance:
+
+- **Live / Zoom**: keep `face_swapper` only, or add `GPEN-256` on CPU. Leaving
+  `GFPGAN-1024` on drops the pipeline to ~0.5 FPS.
+- **Offline render**: enable `gfpgan-1024` for final-quality output.
+- A remote GPU pod is available for batch jobs; it is **not** faster for live
+  because HTTPS+multipart round-trip over the internet dominates (0.5-1.0 s per
+  frame). See `remote-swap-server/` and `scripts/pod`.
+
+## Virtual Camera for Zoom / Meet (macOS)
+
+DLC emits processed frames into `pyvirtualcam` automatically while the live
+preview is running. To make the frames visible to Zoom / Meet:
+
+1. Install OBS Studio 30+ from https://obsproject.com/.
+2. Launch OBS, open **Tools → Start Virtual Camera** once so macOS prompts you
+   to allow the system extension (System Settings → Privacy & Security).
+3. Close OBS; DLC writes into the same virtual camera channel.
+4. In Zoom/Meet camera settings choose **OBS Virtual Camera**.
+
+Disable the fan-out with `DLC_VIRTUALCAM=0` before launching DLC.
+
+## Remote GPU Pod (Batch / Quality Mode)
+
+The `remote-swap-server/` directory contains a FastAPI + ONNX Runtime (CUDA)
+server plus Terraform to provision a RunPod pod.
+
+**When to use it**
+
+- Offline video renders where GFPGAN is desired
+- Faster-than-M2 throughput for long jobs
+
+**When not to use it**
+
+- Live webcam (local CoreML wins on latency)
+
+**Cost-minimising lifecycle** (see `scripts/pod`):
+
+```bash
+export DLC_ENV_FILE=$PWD/env.remote    # RUNPOD_API_KEY, DLC_REMOTE_SWAP_URL
+scripts/pod start      # resume the stopped pod (~1 min)
+# ... process batch ...
+scripts/pod stop       # billing drops to volume-only (~$2/mo for 20 GB)
+scripts/pod destroy    # remove entirely
+```
+
+**Region picking**: Terraform defaults to NYC-adjacent datacenters
+(US-MD-1, CA-MTL-*, US-NC-*). Override with `data_center_ids` if provisioning
+fails for capacity reasons.
+
+**GPU picking**: `inswapper_128` is tiny; Terraform defaults to the cheapest
+RTX 3070 ($0.13/hr) and falls back upward. An RTX 4090 is ~2.5× the cost for
+no practical speedup on this workload.
 
 ## Download all models in this huggingface link
 - [**Download models here**](https://huggingface.co/hacksider/deep-live-cam/tree/main)

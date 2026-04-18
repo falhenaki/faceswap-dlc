@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Control the remote-swap RunPod pod from the command line.
+#
+# Usage:
+#   scripts/pod start            # start a stopped pod
+#   scripts/pod stop             # stop it (billing drops to volume storage only)
+#   scripts/pod status           # print status + health
+#   scripts/pod health           # hit /health via the HTTP proxy
+#   scripts/pod url              # print the current DLC_REMOTE_SWAP_URL
+#   scripts/pod destroy          # terminate the pod entirely
+#
+# Reads RUNPOD_API_KEY from env.remote (or the environment).
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+ENV_FILE="${DLC_ENV_FILE:-$HERE/env.remote}"
+if [[ -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  set -a; source "$ENV_FILE"; set +a
+fi
+
+: "${RUNPOD_API_KEY:?RUNPOD_API_KEY not set (put it in $ENV_FILE or env)}"
+
+get_pod_id() {
+  if [[ -n "${POD_ID:-}" ]]; then echo "$POD_ID"; return; fi
+  # Derive from DLC_REMOTE_SWAP_URL (format: https://<podId>-<port>.proxy.runpod.net)
+  local u="${DLC_REMOTE_SWAP_URL:-}"
+  if [[ -z "$u" ]]; then
+    echo "POD_ID not set and DLC_REMOTE_SWAP_URL missing in $ENV_FILE" >&2; exit 1
+  fi
+  # Strip scheme, then take hostname, then the part before the first dash
+  u="${u#https://}"; u="${u%%.*}"; echo "${u%%-*}"
+}
+
+api() {
+  local method="$1" path="$2"
+  curl -sS -X "$method" -H "Authorization: Bearer $RUNPOD_API_KEY" \
+    -H "Content-Type: application/json" "https://rest.runpod.io/v1$path"
+}
+
+cmd="${1:-status}"
+pod="$(get_pod_id)"
+
+case "$cmd" in
+  start)
+    echo "starting pod $pod ..."
+    api POST "/pods/$pod/start" | python3 -m json.tool | grep -E 'desiredStatus|lastStatusChange|costPerHr' || true
+    ;;
+  stop)
+    echo "stopping pod $pod ..."
+    api POST "/pods/$pod/stop" | python3 -m json.tool | grep -E 'desiredStatus|lastStatusChange' || true
+    ;;
+  destroy)
+    echo "terminating pod $pod ..."
+    api DELETE "/pods/$pod"
+    echo
+    ;;
+  status)
+    api GET "/pods/$pod" | python3 -m json.tool \
+      | grep -E 'desiredStatus|lastStatusChange|costPerHr|publicIp|portMappings|imageName|machineId' || true
+    ;;
+  health)
+    url="${DLC_REMOTE_SWAP_URL:?DLC_REMOTE_SWAP_URL not set}"
+    curl -sS --max-time 10 -w "\nHTTP %{http_code}\n" "$url/health" || true
+    ;;
+  url)
+    echo "${DLC_REMOTE_SWAP_URL:-(unset)}"
+    ;;
+  *)
+    echo "usage: scripts/pod {start|stop|status|health|url|destroy}" >&2
+    exit 2
+    ;;
+esac

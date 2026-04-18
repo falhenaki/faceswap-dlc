@@ -18,42 +18,45 @@ variable "cloud_type" {
 
 variable "gpu_type_ids" {
   type        = list(string)
-  description = "Ordered GPU preferences; first available is used when gpu_type_priority is availability"
+  description = <<-EOT
+    Ordered GPU preferences; cheapest-first for single-user batch workloads.
+    inswapper_128 is tiny (<1GB VRAM); even an RTX 3070 saturates at >100 FPS.
+    Costs below are on-demand hourly on Community Cloud as of 2026-04.
+  EOT
   default = [
-    "NVIDIA GeForce RTX 4090",
-    "NVIDIA GeForce RTX 4080",
-    "NVIDIA GeForce RTX 3090",
-    "NVIDIA RTX A4000",
-    "NVIDIA RTX A4500",
-    "NVIDIA RTX A5000",
-    "NVIDIA L4",
-    "NVIDIA RTX 4000 Ada Generation",
+    "NVIDIA GeForce RTX 3070",        # $0.13/hr, 8GB
+    "NVIDIA RTX A4000",               # $0.17/hr, 16GB
+    "NVIDIA GeForce RTX 3080",        # $0.17/hr, 10GB
+    "NVIDIA GeForce RTX 3080 Ti",     # $0.18/hr, 12GB
+    "NVIDIA RTX A4500",               # $0.19/hr, 20GB
+    "NVIDIA GeForce RTX 3090",        # $0.22/hr, 24GB
+    "NVIDIA GeForce RTX 4070 Ti",     # $0.19/hr, 12GB
+    "NVIDIA RTX 4000 Ada Generation", # $0.20/hr, 20GB
+    "NVIDIA GeForce RTX 4090",        # $0.34/hr, 24GB (last resort)
   ]
 }
 
 variable "data_center_ids" {
   type        = list(string)
-  description = "RunPod data center IDs. Widen if provisioning returns 500 (no capacity)."
+  description = <<-EOT
+    RunPod data center IDs, ordered by proximity to the Northeast US (NYC).
+    Round-trip to NYC: US-MD-1 ~15ms, US-PA-1 ~8ms (if available), CA-MTL-* ~20ms,
+    US-NC-* ~25ms, US-IL-1 ~30ms. Widen down-list on availability errors.
+  EOT
   default = [
-    "US-CA-2",
+    "US-MD-1",
+    "CA-MTL-1",
+    "CA-MTL-3",
+    "CA-MTL-4",
+    "US-NC-1",
+    "US-NC-2",
+    "US-IL-1",
+    "US-GA-2",
+    "US-KS-2",
     "US-TX-3",
     "US-TX-4",
-    "US-KS-2",
-    "US-KS-3",
-    "US-IL-1",
-    "US-GA-1",
-    "US-GA-2",
-    "US-NC-1",
-    "US-DE-1",
+    "US-CA-2",
     "US-WA-1",
-    "CA-MTL-1",
-    "CA-MTL-2",
-    "CA-MTL-3",
-    "EU-CZ-1",
-    "EU-RO-1",
-    "EU-NL-1",
-    "EU-FR-1",
-    "EU-SE-1",
   ]
 }
 
