@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Control the Z-Image RunPod (same API as Deep-Live-Cam/scripts/pod).
+# Reads RUNPOD_API_KEY from ../../Deep-Live-Cam/env.remote if unset.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+DLC_ENV="${DLC_ENV_FILE:-$HERE/../Deep-Live-Cam/env.remote}"
+if [[ -z "${RUNPOD_API_KEY:-}" && -f "$DLC_ENV" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$DLC_ENV"
+  set +a
+fi
+: "${RUNPOD_API_KEY:?RUNPOD_API_KEY not set}"
+
+get_pod_id() {
+  if [[ -n "${ZIMAGE_POD_ID:-}" ]]; then echo "$ZIMAGE_POD_ID"; return; fi
+  if [[ -n "${ZIMAGE_SERVICE_URL:-}" ]]; then
+    u="${ZIMAGE_SERVICE_URL#https://}"
+    u="${u%%.*}"
+    echo "${u%%-*}"
+    return
+  fi
+  TF_BIN="${TERRAFORM:-$HERE/../../.tools/terraform}"
+  if [[ -x "$TF_BIN" ]] && [[ -f "$HERE/terraform/terraform.tfstate" ]]; then
+    "$TF_BIN" -chdir="$HERE/terraform" output -raw pod_id 2>/dev/null
+    return
+  fi
+  echo "Set ZIMAGE_POD_ID or ZIMAGE_SERVICE_URL, or run from repo with terraform state" >&2
+  exit 1
+}
+
+api() {
+  curl -sS -X "$1" -H "Authorization: Bearer $RUNPOD_API_KEY" \
+    -H "Content-Type: application/json" "https://rest.runpod.io/v1$2"
+}
+
+cmd="${1:-status}"
+pod="$(get_pod_id)"
+
+case "$cmd" in
+  start) api POST "/pods/$pod/start" | python3 -m json.tool | grep -E 'desiredStatus|lastStatusChange|costPerHr' || true ;;
+  stop) api POST "/pods/$pod/stop" | python3 -m json.tool | grep -E 'desiredStatus|lastStatusChange' || true ;;
+  destroy) api DELETE "/pods/$pod"; echo ;;
+  status) api GET "/pods/$pod" | python3 -m json.tool | grep -E 'desiredStatus|lastStatusChange|costPerHr|interruptible|imageName|lastStartedAt' || true ;;
+  health)
+    base="${ZIMAGE_SERVICE_URL:-}"
+    if [[ -z "$base" ]]; then
+      TF_BIN="${TERRAFORM:-$HERE/../../.tools/terraform}"
+      base="$("$TF_BIN" -chdir="$HERE/terraform" output -raw zimage_service_url 2>/dev/null)"
+    fi
+    curl -sS --max-time 15 -w "\nHTTP %{http_code}\n" "${base%/}/health" || true
+    ;;
+  url)
+    TF_BIN="${TERRAFORM:-$HERE/../../.tools/terraform}"
+    "$TF_BIN" -chdir="$HERE/terraform" output -raw zimage_service_url 2>/dev/null || echo "(run terraform apply first)"
+    ;;
+  *) echo "usage: scripts/pod {start|stop|status|health|url|destroy}" >&2; exit 2 ;;
+esac

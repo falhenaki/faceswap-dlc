@@ -6,8 +6,8 @@ variable "pod_name" {
 
 variable "container_image" {
   type        = string
-  description = "PyTorch + CUDA 12 runtime matches Dockerfile; required for ZImagePipeline + recent diffusers."
-  default     = "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime"
+  description = "RunPod-hosted PyTorch+CUDA12 image (cached on many hosts); avoids huge pulls from docker.io."
+  default     = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 }
 
 variable "cloud_type" {
@@ -18,54 +18,70 @@ variable "cloud_type" {
 
 variable "gpu_type_ids" {
   type        = list(string)
-  description = "Z-Image-Turbo is ~6B; 16 GB VRAM is comfortable. 12 GB may need ENABLE_MODEL_CPU_OFFLOAD."
+  description = "Wide list for Community Cloud scheduling; 8–12 GB may need enable_model_cpu_offload=true."
   default = [
+    "NVIDIA GeForce RTX 3070",
+    "NVIDIA GeForce RTX 3080",
+    "NVIDIA GeForce RTX 3080 Ti",
+    "NVIDIA GeForce RTX 4070 Ti",
     "NVIDIA RTX A4000",
     "NVIDIA GeForce RTX 3090",
     "NVIDIA RTX A4500",
     "NVIDIA GeForce RTX 4080 SUPER",
     "NVIDIA GeForce RTX 4090",
-    "NVIDIA GeForce RTX 4070 Ti",
-    "NVIDIA GeForce RTX 3080 Ti",
-    "NVIDIA GeForce RTX 3080",
+    "NVIDIA RTX 4000 Ada Generation",
+    "NVIDIA L4",
+    "Tesla V100-PCIE-16GB",
+    "NVIDIA GeForce RTX 3090 Ti",
+    "NVIDIA GeForce RTX 4080",
+    "Tesla T4",
+    "NVIDIA RTX A2000",
+    "NVIDIA GeForce RTX 5080",
   ]
 }
 
 variable "data_center_ids" {
   type        = list(string)
-  description = "NYC-adjacent first; widen if capacity errors."
+  description = "RunPod REST API enum only; short list first, expand via tfvars on 500 capacity errors."
   default = [
-    "US-MD-1",
-    "CA-MTL-1",
-    "CA-MTL-3",
-    "CA-MTL-4",
-    "US-NC-1",
-    "US-NC-2",
-    "US-IL-1",
-    "US-GA-2",
-    "US-KS-2",
+    "US-CA-2",
     "US-TX-3",
     "US-TX-4",
-    "US-CA-2",
-    "US-WA-1",
+    "US-KS-2",
+    "US-IL-1",
+    "US-NC-1",
+    "US-DE-1",
+    "US-GA-2",
+    "CA-MTL-1",
+    "CA-MTL-3",
+    "EU-CZ-1",
+    "EU-NL-1",
+    "EU-RO-1",
   ]
 }
 
 variable "container_disk_in_gb" {
   type        = number
-  description = "Ephemeral disk for pip wheels and transient unpack"
-  default     = 100
+  description = "Ephemeral disk; large values can block Community scheduling"
+  default     = 50
 }
 
 variable "pod_volume_in_gb" {
   type        = number
   description = "HF hub cache on /workspace/hf_cache (persists across stop/start)"
-  default     = 60
+  default     = 50
+}
+
+variable "interruptible" {
+  type        = bool
+  description = "Spot (true) schedules when on-demand returns 500; can be outbid — use `scripts/pod start` to resume."
+  default     = true
 }
 
 variable "zimage_code_git_url" {
   type        = string
-  description = "Git URL RunPod clones on boot (must contain zimage_code_repo_subpath)"
+  description = "Git URL RunPod clones on boot (must contain zimage_code_repo_subpath). Default is a fork that receives agent pushes when upstream is read-only; override to your own repo."
+  default     = "https://github.com/falhenaki/faceswap-dlc.git"
 }
 
 variable "zimage_code_repo_subpath" {
@@ -102,8 +118,8 @@ variable "zimage_api_key" {
 
 variable "enable_model_cpu_offload" {
   type        = bool
-  description = "Set true for tight VRAM (slower)"
-  default     = false
+  description = "Set true for 8–12 GB VRAM (slower but schedules on more GPUs)"
+  default     = true
 }
 
 variable "attention_backend" {

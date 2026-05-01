@@ -29,6 +29,7 @@ resource "runpod_pod" "z_image_turbo" {
   container_disk_in_gb = var.container_disk_in_gb
   volume_in_gb         = var.pod_volume_in_gb
   volume_mount_path    = "/workspace"
+  interruptible        = var.interruptible
 
   ports = ["${local.internal_port}/http", "22/tcp"]
 

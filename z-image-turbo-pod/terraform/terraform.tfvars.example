@@ -1,6 +1,8 @@
 # Copy to terraform.tfvars (gitignored) and customize.
 
-zimage_code_git_url = "https://github.com/YOUR_ORG/YOUR_REPO.git"
+# Default in variables.tf is https://github.com/falhenaki/faceswap-dlc.git (fork with z-image files).
+# Override if you push to another remote:
+# zimage_code_git_url = "https://github.com/Fawaz-sphera/faceswap-dlc.git"
 
 # Optional: same ssh public key you use for other RunPods
 # ssh_public_key = "ssh-ed25519 AAAA... comment"

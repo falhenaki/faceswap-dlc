@@ -11,11 +11,21 @@ If `ZIMAGE_API_KEY` is set on the pod, send `Authorization: Bearer <key>` on `/g
 
 ## RunPod (Terraform)
 
-1. **Push `z-image-turbo-pod/` to the branch RunPod clones** (usually `main` on
-   `zimage_code_git_url`). The pod runs `git clone --depth 1` on every start; if
-   that revision does not contain this directory, the container will exit.
+1. **Git URL** — Terraform defaults to
+   `https://github.com/falhenaki/faceswap-dlc.git` (a fork used when the
+   upstream org repo is read-only to your GitHub user). Override
+   `zimage_code_git_url` to your own clone URL if you prefer. The pod runs
+   `git clone --depth 1` on every start; that revision must contain
+   `z-image-turbo-pod/`.
 
-2. Copy variables and fill in your git URL:
+2. **Spot pods** — `interruptible = true` by default so Community Cloud can
+   schedule when on-demand returns 500. RunPod may **outbid** you (pod goes
+   `EXITED`); resume with `scripts/pod start` (same pattern as DLC).
+
+3. **On-demand** — Set `interruptible = false` in `terraform.tfvars` if your
+   region has capacity and you want a stable GPU (often higher hourly cost).
+
+4. Copy variables if you override defaults:
 
    ```bash
    cd z-image-turbo-pod/terraform
@@ -23,7 +33,7 @@ If `ZIMAGE_API_KEY` is set on the pod, send `Authorization: Bearer <key>` on `/g
    # edit: zimage_code_git_url, optional ssh_public_key, zimage_api_key, hf_token
    ```
 
-3. Export your RunPod API key and apply:
+5. Export your RunPod API key and apply:
 
    ```bash
    export RUNPOD_API_KEY=...
@@ -31,9 +41,11 @@ If `ZIMAGE_API_KEY` is set on the pod, send `Authorization: Bearer <key>` on `/g
    terraform apply
    ```
 
-4. Wait for first boot: weights download to `/workspace/hf_cache` (persists on the attached volume). Until then, `/health` returns `503`. Typical total time is **15–40+ minutes** depending on GPU datacenter bandwidth.
+6. Wait for first boot: weights download to `/workspace/hf_cache` (persists on the attached volume). Until then, `/health` returns `503`. Typical total time is **15–40+ minutes** depending on GPU datacenter bandwidth.
 
-5. Test:
+7. Lifecycle (optional): `scripts/pod start|stop|status|health|url|destroy`
+
+8. Test:
 
    ```bash
    terraform output -raw zimage_service_url
