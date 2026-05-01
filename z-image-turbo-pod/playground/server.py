@@ -30,6 +30,25 @@ PORT = int(os.environ.get("PLAYGROUND_PORT", "8765"))
 # Generation can take many minutes over HTTPS to RunPod
 REMOTE_TIMEOUT = int(os.environ.get("ZIMAGE_REMOTE_TIMEOUT", "900"))
 
+# RunPod sits behind Cloudflare; Python-urllib's default User-Agent is often blocked
+# ("The site owner has blocked access based on your browser's signature").
+_DEFAULT_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+def _browser_headers() -> dict[str, str]:
+    ua = os.environ.get("ZIMAGE_BROWSER_UA", _DEFAULT_UA).strip() or _DEFAULT_UA
+    h: dict[str, str] = {
+        "User-Agent": ua,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": REMOTE,
+        "Referer": REMOTE + "/",
+    }
+    return h
+
 
 def _remote_host() -> str:
     try:
@@ -69,7 +88,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length else b"{}"
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers = {**_browser_headers(), "Content-Type": "application/json"}
         if API_KEY:
             headers["Authorization"] = f"Bearer {API_KEY}"
         req = Request(
@@ -83,8 +102,19 @@ class Handler(BaseHTTPRequestHandler):
                 out = resp.read()
                 code = resp.getcode()
         except HTTPError as e:
-            out = e.read() or b'{"detail":"upstream error"}'
+            raw_err = e.read() or b""
+            out = raw_err or b'{"detail":"upstream error"}'
             code = e.code
+            if raw_err.startswith(b"<") or b"blocked access" in raw_err.lower():
+                msg = (
+                    "RunPod/Cloudflare rejected the request (often bot protection). "
+                    "The proxy now sends a browser User-Agent; if this persists, try "
+                    "ZIMAGE_BROWSER_UA=... or use curl from the same machine to test."
+                )
+                out = json.dumps({"detail": msg, "upstream_snippet": raw_err[:500].decode("utf-8", "replace")}).encode(
+                    "utf-8"
+                )
+                code = 502
         except URLError as e:
             out = json.dumps({"detail": str(e.reason)}).encode("utf-8")
             code = 502
