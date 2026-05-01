@@ -56,7 +56,7 @@ The GPU pod uses a **pre-built image** — no `git clone` on the machine.
 ```bash
 cd z-image-turbo-pod/terraform
 export RUNPOD_API_KEY=...
-# optional: export TF_VAR_ssh_public_key="$(cat /path/to/your_key.pub)"
+# optional: export TF_VAR_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"
 terraform init
 terraform apply
 ```
@@ -76,7 +76,7 @@ cd z-image-turbo-pod && ./scripts/start-playground.sh
 # or: python3 playground/launch.py
 ```
 
-Prereqs: `RUNPOD_API_KEY`, and a private SSH key whose **public** key is on your RunPod account — default path is **`ssh_id_runpod`** at the repo root, or set **`RUNPOD_SSH_KEY`** to the same file you pass as **`-i`** on the pod’s **Connect → SSH** command (RunPod’s sample path is often wrong for your machine). Pod must be running with a **public IP** and SSH. Override SSH user with `ZIMAGE_SSH_USER` if your image uses `ubuntu` instead of `root`.
+Prereqs: `RUNPOD_API_KEY`, `ssh_id_runpod` at the repo root (or `RUNPOD_SSH_KEY`), pod running with a **public IP** and SSH. RunPod’s **Connect** tab often shows `-i ~/.ssh/id_ed25519`; that is only an example—use your real private key path (this repo expects `ssh_id_runpod`, with `runpod.pub` or the matching public half registered on the pod). Override SSH user with `ZIMAGE_SSH_USER` if your image uses `ubuntu` instead of `root`.
 
 **Cloudflare 1010:** The `*.proxy.runpod.net` HTTPS URL sits behind Cloudflare; the launcher avoids it by tunneling to the container. If you must use the proxy URL:
 
