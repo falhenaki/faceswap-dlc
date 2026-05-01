@@ -69,7 +69,9 @@ cd playground && python3 server.py
 # open http://127.0.0.1:8765/
 ```
 
-Prompt-only requests are proxied to RunPod (avoids CORS). Image file input is preview-only until an img2img API exists.
+Prompt-only requests are proxied to RunPod (avoids CORS). The proxy sends a **browser-like `User-Agent`** so Cloudflare on `*.proxy.runpod.net` does not return **1010** (blocked Python clients). Override with `ZIMAGE_UPSTREAM_UA` if needed.
+
+Image file input is preview-only until an img2img API exists.
 
 ## Docker / Kubernetes (cluster)
 
