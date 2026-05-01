@@ -76,7 +76,21 @@ cd playground && pip install -r requirements.txt && python3 server.py
 # open http://127.0.0.1:8765/
 ```
 
-**Cloudflare 1010:** RunPod’s HTTPS URL is behind Cloudflare, which blocks Python’s default TLS fingerprint. The playground uses **`curl_cffi`** (Chrome TLS impersonation). Install `playground/requirements.txt`. If you still see 1010, try `export CURL_CFFI_IMPERSONATE=chrome124` (see [curl_cffi impersonate](https://github.com/lexiforest/curl_cffi)).
+**Cloudflare 1010:** The `*.proxy.runpod.net` URL sits behind Cloudflare; some clients still get **1010** even with `curl_cffi` or system `curl`.
+
+**Reliable bypass:** SSH tunnel to the pod (traffic goes to the container, not the Cloudflare edge):
+
+```bash
+# Use the exact ssh line from RunPod → Connect (user is <podId>-<suffix>@ssh.runpod.io).
+ssh -i ~/.ssh/your_runpod_key -N -L 18000:127.0.0.1:8000 xxxxx-yyyyy@ssh.runpod.io
+# In another terminal:
+export ZIMAGE_SERVICE_URL=http://127.0.0.1:18000
+cd playground && pip install -r requirements.txt && python3 server.py
+```
+
+Port **8000** is the app inside the container; **18000** is arbitrary local port.
+
+Fallbacks: `curl_cffi` (see `requirements.txt`), automatic retry with system **`curl`**, and `CURL_CFFI_IMPERSONATE=chrome124` if needed.
 
 Image file input is preview-only until an img2img API exists.
 
