@@ -60,6 +60,17 @@ terraform apply
 
 6. **Lifecycle** — `scripts/pod start|stop|status|health|url|destroy` (reads `RUNPOD_API_KEY` from `../Deep-Live-Cam/env.remote` if unset).
 
+## Local playground (browser UI)
+
+```bash
+export ZIMAGE_SERVICE_URL="$(terraform -chdir=terraform output -raw zimage_service_url)"
+# optional: export ZIMAGE_API_KEY=...  # if the pod enforces Bearer auth
+cd playground && python3 server.py
+# open http://127.0.0.1:8765/
+```
+
+Prompt-only requests are proxied to RunPod (avoids CORS). Image file input is preview-only until an img2img API exists.
+
 ## Docker / Kubernetes (cluster)
 
 See `Dockerfile` and `k8s/pod-and-service.yaml` (set image to your GHCR tag).
