@@ -4,8 +4,8 @@ One-command Z-Image playground: SSH tunnel (bypasses Cloudflare 1010) + local UI
 
 Prereqs (once):
   - faceswap/Deep-Live-Cam/env.remote with RUNPOD_API_KEY
-  - Private key for RunPod SSH: default faceswap/ssh_id_runpod, or RUNPOD_SSH_KEY / --ssh-key
-    (same file as -i in RunPod → Connect → SSH; their example path may not match yours)
+  - faceswap/ssh_id_runpod private key (pairs with runpod.pub; RunPod's example uses
+    -i ~/.ssh/id_ed25519 but this launcher defaults to ssh_id_runpod — use --ssh-key if elsewhere)
   - terraform state for z-image pod, OR set ZIMAGE_POD_ID
 
   pip install -r requirements.txt
