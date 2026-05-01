@@ -1,8 +1,8 @@
 # Z-Image-Turbo GPU Pod + ClusterIP Service
 #
-# 1. Build and push the image (replace registry):
-#    docker build -t YOUR_REGISTRY/z-image-turbo:latest .
-#    docker push YOUR_REGISTRY/z-image-turbo:latest
+# 1. Build and push the image (GHCR example):
+#    docker buildx build --platform linux/amd64 -t ghcr.io/YOU/faceswap-z-image-turbo:latest --push z-image-turbo-pod/
+#    Or use GitHub Actions: .github/workflows/z-image-ghcr.yml
 #
 # 2. (Optional) Hugging Face token if the repo requires auth — create a secret:
 #    kubectl create secret generic hf-token --from-literal=HF_TOKEN=hf_...
@@ -42,7 +42,7 @@ spec:
   # runtimeClassName: nvidia
   containers:
     - name: z-image-turbo
-      image: YOUR_REGISTRY/z-image-turbo:latest
+      image: ghcr.io/YOUR_USER/faceswap-z-image-turbo:latest
       imagePullPolicy: IfNotPresent
       ports:
         - containerPort: 8000

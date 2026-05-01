@@ -6,8 +6,8 @@ variable "pod_name" {
 
 variable "container_image" {
   type        = string
-  description = "RunPod-hosted PyTorch+CUDA12 image (cached on many hosts); avoids huge pulls from docker.io."
-  default     = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+  description = "Pre-built image (push via .github/workflows/z-image-ghcr.yml). Must be linux/amd64 + CUDA for RunPod GPU."
+  default     = "ghcr.io/falhenaki/faceswap-z-image-turbo:latest"
 }
 
 variable "cloud_type" {
@@ -76,18 +76,6 @@ variable "interruptible" {
   type        = bool
   description = "Spot (true) schedules when on-demand returns 500; can be outbid — use `scripts/pod start` to resume."
   default     = true
-}
-
-variable "zimage_code_git_url" {
-  type        = string
-  description = "Git URL RunPod clones on boot (must contain zimage_code_repo_subpath). Default is a fork that receives agent pushes when upstream is read-only; override to your own repo."
-  default     = "https://github.com/falhenaki/faceswap-dlc.git"
-}
-
-variable "zimage_code_repo_subpath" {
-  type        = string
-  description = "Path from repo root to z-image-turbo-pod directory"
-  default     = "z-image-turbo-pod"
 }
 
 variable "zimage_model_id" {
