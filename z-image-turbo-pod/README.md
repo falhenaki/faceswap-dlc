@@ -14,15 +14,24 @@ If `ZIMAGE_API_KEY` is set on the pod, send `Authorization: Bearer <key>` on `/g
 The GPU pod uses a **pre-built image** — no `git clone` on the machine.
 
 1. **Build and push** the **linux/amd64** image (RunPod GPUs are x86):
-   ```bash
-   docker login ghcr.io -u YOUR_GH_USER
-   cd z-image-turbo-pod
-   docker buildx build --platform linux/amd64 \
-     -t ghcr.io/YOUR_GH_USER/faceswap-z-image-turbo:latest --push .
-   ```
-   Match `YOUR_GH_USER` to `container_image` in Terraform (default expects `ghcr.io/falhenaki/faceswap-z-image-turbo:latest`).
 
-   **GitHub Actions:** add a workflow under `.github/workflows/` that runs `docker/build-push-action` with `packages: write` (your `gh` token needs the **`workflow`** scope to push workflow files from the CLI).
+   **GHCR (persistent)** — needs a token with **`write:packages`** (and often `read:packages`):
+   ```bash
+   echo "$(gh auth token)" | docker login ghcr.io -u YOUR_GH_USER --password-stdin
+   cd z-image-turbo-pod
+   GHCR_USER=YOUR_GH_USER ./scripts/build-and-push-ghcr.sh
+   ```
+   If `gh auth token` push is **denied: wrong scopes**, run  
+   `gh auth refresh -h github.com -s write:packages -s read:packages`  
+   and complete the browser/device flow, then push again.
+
+   **ttl.sh (no login, ephemeral)** — if GHCR is blocked, anonymous registry (image expires per tag, often **≤24h**):
+   ```bash
+   cd z-image-turbo-pod && ./scripts/push-ttl.sh
+   terraform -chdir=terraform apply -var="container_image=$(cat terraform/pushed-image.var)"
+   ```
+
+   Default `container_image` in Terraform remains **`ghcr.io/falhenaki/faceswap-z-image-turbo:latest`** after you publish there; override with `-var` or `terraform.tfvars` when using ttl.sh.
 
 2. **GHCR visibility** — For RunPod to pull without registry credentials, set the package to **public** (GitHub → Packages → package → Package settings → Change visibility). Private images need RunPod pull secrets (not wired in this Terraform).
 
