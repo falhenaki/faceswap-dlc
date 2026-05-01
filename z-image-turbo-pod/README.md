@@ -65,11 +65,11 @@ terraform apply
 ```bash
 export ZIMAGE_SERVICE_URL="$(terraform -chdir=terraform output -raw zimage_service_url)"
 # optional: export ZIMAGE_API_KEY=...  # if the pod enforces Bearer auth
-cd playground && python3 server.py
+cd playground && pip install -r requirements.txt && python3 server.py
 # open http://127.0.0.1:8765/
 ```
 
-Prompt-only requests are proxied to RunPod (avoids CORS). The proxy sends a **browser-like `User-Agent`** so Cloudflare on `*.proxy.runpod.net` does not return **1010** (blocked Python clients). Override with `ZIMAGE_UPSTREAM_UA` if needed.
+**Cloudflare 1010:** RunPod’s HTTPS URL is behind Cloudflare, which blocks Python’s default TLS fingerprint. The playground uses **`curl_cffi`** (Chrome TLS impersonation). Install `playground/requirements.txt`. If you still see 1010, try `export CURL_CFFI_IMPERSONATE=chrome124` (see [curl_cffi impersonate](https://github.com/lexiforest/curl_cffi)).
 
 Image file input is preview-only until an img2img API exists.
 

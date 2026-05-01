@@ -6,6 +6,7 @@ Local playground: static UI + JSON proxy to RunPod Z-Image (avoids browser CORS)
   # optional if the pod has ZIMAGE_API_KEY set:
   # export ZIMAGE_API_KEY=...
 
+  pip install -r requirements.txt   # curl_cffi: Chrome TLS for Cloudflare
   python3 server.py
   open http://127.0.0.1:8765/
 """
@@ -20,6 +21,14 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+try:
+    from curl_cffi import requests as curl_requests
+
+    _CURL_CFFI = True
+except ImportError:
+    curl_requests = None  # type: ignore[misc, assignment]
+    _CURL_CFFI = False
+
 DIR = Path(__file__).resolve().parent
 INDEX = (DIR / "index.html").read_text(encoding="utf-8")
 
@@ -30,25 +39,23 @@ PORT = int(os.environ.get("PLAYGROUND_PORT", "8765"))
 # Generation can take many minutes over HTTPS to RunPod
 REMOTE_TIMEOUT = int(os.environ.get("ZIMAGE_REMOTE_TIMEOUT", "900"))
 
-# RunPod HTTPS proxy sits behind Cloudflare; default Python urllib User-Agent
-# triggers Error 1010 (browser_signature_banned). Use a normal browser string.
-_DEFAULT_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
+# Cloudflare 1010: blocks Python’s TLS fingerprint (JA3), not just User-Agent.
+# curl_cffi impersonates Chrome TLS; install: pip install -r requirements.txt
+_DEFAULT_IMPERSONATE = "chrome136"
 
 
 def _upstream_headers() -> dict[str, str]:
-    ua = os.environ.get("ZIMAGE_UPSTREAM_UA", _DEFAULT_UA).strip() or _DEFAULT_UA
     base = REMOTE
-    return {
-        "User-Agent": ua,
+    h: dict[str, str] = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Content-Type": "application/json",
         "Origin": base,
         "Referer": base + "/",
     }
+    ua = os.environ.get("ZIMAGE_UPSTREAM_UA", "").strip()
+    if ua:
+        h["User-Agent"] = ua
+    return h
 
 
 def _remote_host() -> str:
@@ -89,19 +96,32 @@ class Handler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length else b"{}"
+        url = f"{REMOTE}/generate"
         headers = dict(_upstream_headers())
         if API_KEY:
             headers["Authorization"] = f"Bearer {API_KEY}"
-        req = Request(
-            f"{REMOTE}/generate",
-            data=raw,
-            method="POST",
-            headers=headers,
-        )
+
         try:
-            with urlopen(req, timeout=REMOTE_TIMEOUT) as resp:
-                out = resp.read()
-                code = resp.getcode()
+            if _CURL_CFFI and curl_requests is not None:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+                impersonate = os.environ.get(
+                    "CURL_CFFI_IMPERSONATE", _DEFAULT_IMPERSONATE
+                ).strip() or _DEFAULT_IMPERSONATE
+                r = curl_requests.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    impersonate=impersonate,
+                    timeout=REMOTE_TIMEOUT,
+                )
+                out = r.content
+                code = r.status_code
+            else:
+                headers["Content-Type"] = "application/json"
+                req = Request(url, data=raw, method="POST", headers=headers)
+                with urlopen(req, timeout=REMOTE_TIMEOUT) as resp:
+                    out = resp.read()
+                    code = resp.getcode()
         except HTTPError as e:
             out = e.read() or b'{"detail":"upstream error"}'
             code = e.code
@@ -131,7 +151,15 @@ def main() -> None:
         print("ZIMAGE_SERVICE_URL should start with https://", file=sys.stderr)
         sys.exit(1)
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
-    print(f"Playground http://{BIND}:{PORT}/  →  {REMOTE}/generate", flush=True)
+    mode = (
+        f"curl_cffi impersonate={os.environ.get('CURL_CFFI_IMPERSONATE', _DEFAULT_IMPERSONATE)}"
+        if _CURL_CFFI
+        else "urllib (install curl-cffi — Cloudflare may return 1010)"
+    )
+    print(
+        f"Playground http://{BIND}:{PORT}/  →  {REMOTE}/generate  [{mode}]",
+        flush=True,
+    )
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
