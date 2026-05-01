@@ -227,6 +227,12 @@ def main() -> None:
                 f"ssh stderr: {err[:500]}",
                 file=sys.stderr,
             )
+            if "Connection refused" in err:
+                print(
+                    "Hint: runpod often returns connection refused when the pod is stopped "
+                    "or still starting—start it in the dashboard and retry.",
+                    file=sys.stderr,
+                )
             sys.exit(1)
 
         os.environ["ZIMAGE_SERVICE_URL"] = f"http://127.0.0.1:{local_port}"
