@@ -15,6 +15,7 @@ With `ZIMAGE_SERVICE_URL` set (same tunnel or HTTPS URL as the playground), gene
 
 ```bash
 cd z-image-turbo-pod
+pip install curl_cffi   # only needed for https://*.proxy.runpod.net (Cloudflare 1010 on plain urllib)
 export ZIMAGE_SERVICE_URL=http://127.0.0.1:18000   # after SSH -L …, or use proxy URL
 python3 scripts/generate_z_image.py -o dog.png
 python3 scripts/generate_z_image.py --prompt "a shiba inu astronaut" -o shiba.png

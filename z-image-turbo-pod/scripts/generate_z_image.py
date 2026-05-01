@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Call the remote Z-Image service POST /generate and save a PNG (no browser UI).
+Call the remote Z-Image services POST /generate and save a PNG (no browser UI).
 
-Needs ZIMAGE_SERVICE_URL — same as the playground, e.g. after SSH tunnel:
-  export ZIMAGE_SERVICE_URL=http://127.0.0.1:18000
+Needs ZIMAGE_SERVICE_URL — tunnel (http://127.0.0.1:…) or RunPod HTTPS proxy.
+
+For https://*.proxy.runpod.net, POST is often blocked for plain urllib (Cloudflare 1010).
+This script uses curl_cffi (Chrome TLS) when available — same as playground/requirements.txt.
 
 Loads faceswap/Deep-Live-Cam/env.remote into the environment when keys are unset.
 If the pod sets ZIMAGE_API_KEY, also export ZIMAGE_API_KEY (or pass via env).
@@ -19,6 +21,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 SCRIPT = Path(__file__).resolve()
 REPO = SCRIPT.parent.parent.parent  # faceswap/
@@ -40,6 +43,22 @@ def _load_env_file(path: Path) -> None:
         k, v = k.strip(), v.strip().strip('"').strip("'")
         if k and k not in os.environ:
             os.environ[k] = v
+
+
+def _via_urllib(url: str, body: bytes, headers: dict[str, str]) -> str:
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+    with urllib.request.urlopen(req, timeout=1200) as r:
+        return r.read().decode("utf-8")
+
+
+def _via_curl_cffi(url: str, payload: dict, headers: dict[str, str]) -> str:
+    from curl_cffi import requests as cr  # type: ignore[import-untyped]
+
+    impersonate = os.environ.get("CURL_CFFI_IMPERSONATE", "chrome136").strip() or "chrome136"
+    r = cr.post(url, json=payload, headers=headers or None, impersonate=impersonate, timeout=1200)
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text[:800]}")
+    return r.text
 
 
 def main() -> None:
@@ -71,7 +90,8 @@ def main() -> None:
     if not base:
         print(
             "Set ZIMAGE_SERVICE_URL to your pod base URL.\n"
-            "Example after tunnel: export ZIMAGE_SERVICE_URL=http://127.0.0.1:18000",
+            "Example: export ZIMAGE_SERVICE_URL=https://<pod>-8000.proxy.runpod.net\n"
+            "Or after tunnel: export ZIMAGE_SERVICE_URL=http://127.0.0.1:18000",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -87,23 +107,47 @@ def main() -> None:
     if args.seed is not None:
         payload["seed"] = args.seed
 
-    body = json.dumps(payload).encode("utf-8")
     url = f"{base}/generate"
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=1200) as r:
-            raw = r.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:800]
-        print(f"HTTP {e.code}: {detail}", file=sys.stderr)
-        sys.exit(1)
-    except urllib.error.URLError as e:
-        print(f"Request failed: {e}", file=sys.stderr)
-        sys.exit(1)
+    scheme = urlparse(base).scheme.lower()
+    raw: str | None = None
+
+    if scheme == "https":
+        try:
+            raw = _via_curl_cffi(url, payload, {k: v for k, v in headers.items() if v})
+        except ImportError:
+            print(
+                "HTTPS Z-Image needs curl_cffi (Cloudflare 1010 on plain Python TLS).\n"
+                "  pip install curl_cffi\n"
+                "Falling back to urllib — may fail with 403.",
+                file=sys.stderr,
+            )
+        except Exception as e:  # retry urllib
+            print(f"curl_cffi request failed: {e}; trying urllib…", file=sys.stderr)
+            raw = None
+
+    if raw is None:
+        body = json.dumps(payload).encode("utf-8")
+        try:
+            raw = _via_urllib(url, body, headers)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:800]
+            if e.code == 403 and "1010" in detail and scheme == "https":
+                print(
+                    f"HTTP {e.code} (Cloudflare).\n"
+                    "Install: pip install curl_cffi\n"
+                    f"Detail: {detail[:400]}",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"HTTP {e.code}: {detail}", file=sys.stderr)
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            print(f"Request failed: {e}", file=sys.stderr)
+            sys.exit(1)
 
     try:
         data = json.loads(raw)
