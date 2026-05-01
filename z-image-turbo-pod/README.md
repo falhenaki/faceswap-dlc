@@ -15,7 +15,14 @@ The GPU pod uses a **pre-built image** — no `git clone` on the machine.
 
 1. **Build and push** the **linux/amd64** image (RunPod GPUs are x86):
 
-   **GHCR (persistent)** — needs a token with **`write:packages`** (and often `read:packages`):
+   **ECR Public (AWS, anonymous pull)** — layers live in AWS; RunPod does not need registry credentials:
+   ```bash
+   export AWS_REGION=us-east-1
+   cd z-image-turbo-pod && ./scripts/push-ecr-public.sh
+   ```
+   Default Terraform `container_image` is **`public.ecr.aws/z7e3d2d1/faceswap-z-image-turbo:latest`** after the first push from this account.
+
+   **GHCR** — needs a token with **`write:packages`** (and often `read:packages`):
    ```bash
    echo "$(gh auth token)" | docker login ghcr.io -u YOUR_GH_USER --password-stdin
    cd z-image-turbo-pod

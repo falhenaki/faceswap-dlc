@@ -6,8 +6,8 @@ variable "pod_name" {
 
 variable "container_image" {
   type        = string
-  description = "OCI image ref (docker pull). linux/amd64 + CUDA. Examples: ghcr.io/..., ttl.sh/..., ACCOUNT.dkr.ecr.REGION.amazonaws.com/REPO:tag (ECR = S3-backed in AWS). Not s3:// — use ECR or another registry."
-  default     = "ghcr.io/falhenaki/faceswap-z-image-turbo:latest"
+  description = "OCI image ref (docker pull). linux/amd64 + CUDA. Default: ECR Public (pullable without auth)."
+  default     = "public.ecr.aws/z7e3d2d1/faceswap-z-image-turbo:latest"
 }
 
 variable "cloud_type" {
