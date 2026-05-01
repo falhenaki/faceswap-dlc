@@ -23,9 +23,7 @@ from urllib.request import Request, urlopen
 DIR = Path(__file__).resolve().parent
 INDEX = (DIR / "index.html").read_text(encoding="utf-8")
 
-REMOTE = os.environ.get(
-    "ZIMAGE_SERVICE_URL", "https://758kfzcy39xrfd-8000.proxy.runpod.net"
-).rstrip("/")
+REMOTE = os.environ.get("ZIMAGE_SERVICE_URL", "").rstrip("/")
 API_KEY = os.environ.get("ZIMAGE_API_KEY", "").strip()
 BIND = os.environ.get("PLAYGROUND_HOST", "127.0.0.1")
 PORT = int(os.environ.get("PLAYGROUND_PORT", "8765"))
@@ -102,8 +100,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    if not REMOTE:
+        print(
+            "Set ZIMAGE_SERVICE_URL to your RunPod base URL, e.g.\n"
+            "  export ZIMAGE_SERVICE_URL=$(terraform -chdir=../terraform output -raw zimage_service_url)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if not REMOTE.startswith("https://"):
-        print("Set ZIMAGE_SERVICE_URL to your RunPod https://…-8000.proxy.runpod.net", file=sys.stderr)
+        print("ZIMAGE_SERVICE_URL should start with https://", file=sys.stderr)
+        sys.exit(1)
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"Playground http://{BIND}:{PORT}/  →  {REMOTE}/generate", flush=True)
     try:
