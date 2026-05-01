@@ -9,6 +9,17 @@ HTTP service for [Tongyi-MAI/Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-
 
 If `ZIMAGE_API_KEY` is set on the pod, send `Authorization: Bearer <key>` on `/generate`.
 
+## One-off image (no UI)
+
+With `ZIMAGE_SERVICE_URL` set (same tunnel or HTTPS URL as the playground), generate a single PNG from the default dog prompt or your own:
+
+```bash
+cd z-image-turbo-pod
+export ZIMAGE_SERVICE_URL=http://127.0.0.1:18000   # after SSH -L …, or use proxy URL
+python3 scripts/generate_z_image.py -o dog.png
+python3 scripts/generate_z_image.py --prompt "a shiba inu astronaut" -o shiba.png
+```
+
 ## Docker image (what RunPod runs)
 
 The GPU pod uses a **pre-built image** — no `git clone` on the machine.
@@ -76,7 +87,7 @@ cd z-image-turbo-pod && ./scripts/start-playground.sh
 # or: python3 playground/launch.py
 ```
 
-Prereqs: `RUNPOD_API_KEY`, `ssh_id_runpod` at the repo root (or `RUNPOD_SSH_KEY`), pod running with a **public IP** and SSH. RunPod’s **Connect** tab often shows `-i ~/.ssh/id_ed25519`; that is only an example—use your real private key path (this repo expects `ssh_id_runpod`, with `runpod.pub` or the matching public half registered on the pod). Override SSH user with `ZIMAGE_SSH_USER` if your image uses `ubuntu` instead of `root`.
+Prereqs: `RUNPOD_API_KEY`, `ssh_id_runpod` at the repo root (or `RUNPOD_SSH_KEY`), pod running with a **public IP** and SSH. Override SSH user with `ZIMAGE_SSH_USER` if your image uses `ubuntu` instead of `root`.
 
 **Cloudflare 1010:** The `*.proxy.runpod.net` HTTPS URL sits behind Cloudflare; the launcher avoids it by tunneling to the container. If you must use the proxy URL:
 
