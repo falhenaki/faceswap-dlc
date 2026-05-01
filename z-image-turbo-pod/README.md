@@ -31,7 +31,16 @@ The GPU pod uses a **pre-built image** — no `git clone` on the machine.
    terraform -chdir=terraform apply -var="container_image=$(cat terraform/pushed-image.var)"
    ```
 
-   Default `container_image` in Terraform remains **`ghcr.io/falhenaki/faceswap-z-image-turbo:latest`** after you publish there; override with `-var` or `terraform.tfvars` when using ttl.sh.
+   **AWS (S3-backed via ECR)** — RunPod’s `image_name` must be a **registry** URL (`docker pull`), not `s3://…`. **Amazon ECR** stores layers on AWS (S3-backed) and exposes the normal pull API:
+   ```bash
+   export AWS_REGION=us-east-1   # pick a region near you / the pod
+   cd z-image-turbo-pod && ./scripts/push-ecr.sh
+   ```
+   Use the printed `…dkr.ecr…amazonaws.com/…:tag` as `container_image`. Private ECR needs RunPod registry credentials; **public ECR** (`public.ecr.aws/...`) avoids that for pulls.
+
+   **Raw tar on S3 (not for RunPod `image_name`)** — to stash a tarball in a bucket (backup), use `./scripts/archive-tar-to-s3.sh` after setting `S3_URI`. Someone with Docker can `docker load` after download; for deployment, prefer **ECR** so RunPod pulls OCI directly.
+
+   Default `container_image` in Terraform remains **`ghcr.io/falhenaki/faceswap-z-image-turbo:latest`** if you use GHCR; override with `-var` or `terraform.tfvars` for ttl / ECR / etc.
 
 2. **GHCR visibility** — For RunPod to pull without registry credentials, set the package to **public** (GitHub → Packages → package → Package settings → Change visibility). Private images need RunPod pull secrets (not wired in this Terraform).
 

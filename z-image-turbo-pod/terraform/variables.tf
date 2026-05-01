@@ -6,7 +6,7 @@ variable "pod_name" {
 
 variable "container_image" {
   type        = string
-  description = "Pre-built image (push via .github/workflows/z-image-ghcr.yml). Must be linux/amd64 + CUDA for RunPod GPU."
+  description = "OCI image ref (docker pull). linux/amd64 + CUDA. Examples: ghcr.io/..., ttl.sh/..., ACCOUNT.dkr.ecr.REGION.amazonaws.com/REPO:tag (ECR = S3-backed in AWS). Not s3:// — use ECR or another registry."
   default     = "ghcr.io/falhenaki/faceswap-z-image-turbo:latest"
 }
 
