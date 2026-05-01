@@ -1,0 +1,116 @@
+# Z-Image-Turbo GPU Pod + ClusterIP Service
+#
+# 1. Build and push the image (replace registry):
+#    docker build -t YOUR_REGISTRY/z-image-turbo:latest .
+#    docker push YOUR_REGISTRY/z-image-turbo:latest
+#
+# 2. (Optional) Hugging Face token if the repo requires auth — create a secret:
+#    kubectl create secret generic hf-token --from-literal=HF_TOKEN=hf_...
+#
+# 3. Edit the image line below, then:
+#    kubectl apply -f pod-and-service.yaml
+#
+# 4. Port-forward to test:
+#    kubectl port-forward pod/z-image-turbo 8000:8000
+#    curl -s http://127.0.0.1:8000/health
+#
+# First boot downloads weights (~10–20+ GB) — startup may take many minutes.
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: z-image-hf-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  # storageClassName: standard  # uncomment and set for your cluster
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: z-image-turbo
+  labels:
+    app: z-image-turbo
+spec:
+  restartPolicy: Always
+  # Uncomment if your cluster requires the NVIDIA runtime class:
+  # runtimeClassName: nvidia
+  containers:
+    - name: z-image-turbo
+      image: YOUR_REGISTRY/z-image-turbo:latest
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 8000
+          name: http
+      env:
+        - name: ZIMAGE_MODEL_ID
+          value: "Tongyi-MAI/Z-Image-Turbo"
+        - name: TORCH_DTYPE
+          value: "bfloat16"
+        # --- Optional ---
+        # - name: HF_TOKEN
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: hf-token
+        #       key: HF_TOKEN
+        # Low VRAM (try after normal deploy fails OOM):
+        # - name: ENABLE_MODEL_CPU_OFFLOAD
+        #   value: "true"
+        # Flash Attention (only if supported in your image/GPU stack):
+        # - name: ATTENTION_BACKEND
+        #   value: "flash"
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+          memory: "64Gi"
+          cpu: "8"
+        requests:
+          nvidia.com/gpu: "1"
+          memory: "24Gi"
+          cpu: "4"
+      volumeMounts:
+        - name: hf-cache
+          mountPath: /models/hf-cache
+      startupProbe:
+        httpGet:
+          path: /health
+          port: http
+        periodSeconds: 15
+        failureThreshold: 120
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: http
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: http
+        periodSeconds: 30
+        timeoutSeconds: 5
+        failureThreshold: 3
+  volumes:
+    - name: hf-cache
+      persistentVolumeClaim:
+        claimName: z-image-hf-cache
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: z-image-turbo
+spec:
+  type: ClusterIP
+  selector:
+    app: z-image-turbo
+  ports:
+    - port: 8000
+      targetPort: http
+      name: http

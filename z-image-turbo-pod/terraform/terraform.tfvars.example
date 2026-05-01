@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars (gitignored) and customize.
+
+zimage_code_git_url = "https://github.com/YOUR_ORG/YOUR_REPO.git"
+
+# Optional: same ssh public key you use for other RunPods
+# ssh_public_key = "ssh-ed25519 AAAA... comment"
+
+# Optional: require Bearer token on POST /generate
+# zimage_api_key = "generate-a-long-random-string"
+
+# Optional: Hugging Face token for gated models
+# hf_token = "hf_..."
+
+# Tight VRAM (e.g. 12 GB cards)
+# enable_model_cpu_offload = true
