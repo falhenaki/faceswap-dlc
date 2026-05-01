@@ -69,28 +69,33 @@ terraform apply
 
 ## Local playground (browser UI)
 
+**Recommended (one command):** loads `RUNPOD_API_KEY` from `../Deep-Live-Cam/env.remote` if unset, resolves the pod from Terraform `pod_id` (or `ZIMAGE_POD_ID`), opens an SSH tunnel to `127.0.0.1:8000` in the pod, sets `ZIMAGE_SERVICE_URL=http://127.0.0.1:<port>`, installs playground deps, and starts the UI (browser opens by default).
+
 ```bash
-export ZIMAGE_SERVICE_URL="$(terraform -chdir=terraform output -raw zimage_service_url)"
-# optional: export ZIMAGE_API_KEY=...  # if the pod enforces Bearer auth
-cd playground && pip install -r requirements.txt && python3 server.py
-# open http://127.0.0.1:8765/
+cd z-image-turbo-pod && ./scripts/start-playground.sh
+# or: python3 playground/launch.py
 ```
 
-**Cloudflare 1010:** The `*.proxy.runpod.net` URL sits behind Cloudflare; some clients still get **1010** even with `curl_cffi` or system `curl`.
+Prereqs: `RUNPOD_API_KEY`, `ssh_id_runpod` at the repo root (or `RUNPOD_SSH_KEY`), pod running with a **public IP** and SSH. Override SSH user with `ZIMAGE_SSH_USER` if your image uses `ubuntu` instead of `root`.
 
-**Reliable bypass:** SSH tunnel to the pod (traffic goes to the container, not the Cloudflare edge):
+**Cloudflare 1010:** The `*.proxy.runpod.net` HTTPS URL sits behind Cloudflare; the launcher avoids it by tunneling to the container. If you must use the proxy URL:
 
 ```bash
-# Use the exact ssh line from RunPod → Connect (user is <podId>-<suffix>@ssh.runpod.io).
-ssh -i ~/.ssh/your_runpod_key -N -L 18000:127.0.0.1:8000 xxxxx-yyyyy@ssh.runpod.io
-# In another terminal:
+export ZIMAGE_SERVICE_URL="$(terraform -chdir=terraform output -raw zimage_service_url)"
+python3 playground/launch.py --skip-tunnel
+```
+
+**Manual tunnel** (same as the launcher, for debugging):
+
+```bash
+ssh -i path/to/key -N -L 18000:127.0.0.1:8000 -p <ssh_port> user@<pod_public_ip>
 export ZIMAGE_SERVICE_URL=http://127.0.0.1:18000
 cd playground && pip install -r requirements.txt && python3 server.py
 ```
 
-Port **8000** is the app inside the container; **18000** is arbitrary local port.
+Port **8000** is the app inside the container; the default local forward port is **18000** (`ZIMAGE_TUNNEL_LOCAL_PORT`).
 
-Fallbacks: `curl_cffi` (see `requirements.txt`), automatic retry with system **`curl`**, and `CURL_CFFI_IMPERSONATE=chrome124` if needed.
+Fallbacks inside `server.py`: `curl_cffi` (see `requirements.txt`), automatic retry with system **`curl`**, and `CURL_CFFI_IMPERSONATE=chrome124` if needed.
 
 Image file input is preview-only until an img2img API exists.
 
