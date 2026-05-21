@@ -36,7 +36,7 @@ resource "runpod_pod" "dlc_remote_swap" {
   env = merge(
     {
       SWAP_SERVICE_API_KEY = var.swap_service_api_key
-      INSWAPPER_MODEL_PATH = "/workspace/models/inswapper_128.onnx"
+      SWAP_MODEL_TYPE      = var.swap_model_type
       SWAP_REPO_URL        = var.swap_code_git_url
       SWAP_REPO_SUBPATH    = var.swap_code_repo_subpath
       PORT                 = tostring(local.internal_port)

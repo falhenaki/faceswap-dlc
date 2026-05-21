@@ -14,12 +14,33 @@ pkill -f '[u]vicorn app:app' 2>/dev/null || true
 sleep 1
 MODEL_DIR="${MODEL_DIR:-/workspace/models}"
 mkdir -p "$MODEL_DIR"
-MODEL="${INSWAPPER_MODEL_PATH:-$MODEL_DIR/inswapper_128.onnx}"
+# Default to HyperSwap 1a 256 (current SOTA for live swap). Override via SWAP_MODEL_TYPE
+# = inswapper to roll back to the original inswapper_128 path.
+SWAP_MODEL_TYPE="${SWAP_MODEL_TYPE:-hyperswap}"
+case "$SWAP_MODEL_TYPE" in
+  hyperswap)
+    DEFAULT_MODEL="$MODEL_DIR/hyperswap_1a_256.onnx"
+    DEFAULT_URL="https://huggingface.co/facefusion/models-3.3.0/resolve/main/hyperswap_1a_256.onnx?download=true"
+    ;;
+  inswapper)
+    DEFAULT_MODEL="$MODEL_DIR/inswapper_128.onnx"
+    DEFAULT_URL="https://huggingface.co/hacksider/deep-live-cam/resolve/main/inswapper_128.onnx?download=true"
+    ;;
+  *)
+    echo "Unknown SWAP_MODEL_TYPE=$SWAP_MODEL_TYPE (expected hyperswap|inswapper)"
+    exit 1
+    ;;
+esac
+MODEL="${SWAP_MODEL_PATH:-$DEFAULT_MODEL}"
 if [[ ! -f "$MODEL" ]]; then
-  echo "Downloading inswapper to $MODEL ..."
-  curl -fL -o "$MODEL" "https://huggingface.co/hacksider/deep-live-cam/resolve/main/inswapper_128.onnx?download=true"
+  echo "Downloading $SWAP_MODEL_TYPE model to $MODEL ..."
+  curl -fL -o "$MODEL" "$DEFAULT_URL"
 fi
-export INSWAPPER_MODEL_PATH="$MODEL"
+export SWAP_MODEL_TYPE
+export SWAP_MODEL_PATH="$MODEL"
+# Backwards-compat: keep INSWAPPER_MODEL_PATH set when running inswapper, for any
+# tooling that still reads it.
+[[ "$SWAP_MODEL_TYPE" == "inswapper" ]] && export INSWAPPER_MODEL_PATH="$MODEL"
 if [[ -z "${SWAP_SERVICE_API_KEY:-}" ]]; then
   echo "Set SWAP_SERVICE_API_KEY before starting (same value as DLC_REMOTE_SWAP_API_KEY on your Mac)."
   exit 1

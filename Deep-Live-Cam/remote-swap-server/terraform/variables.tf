@@ -43,16 +43,20 @@ variable "data_center_ids" {
     Round-trip to NYC: US-MD-1 ~15ms, US-PA-1 ~8ms (if available), CA-MTL-* ~20ms,
     US-NC-* ~25ms, US-IL-1 ~30ms. Widen down-list on availability errors.
   EOT
+  # Validated against RunPod's REST v1 dataCenterIds enum on 2026-05-20.
+  # Removed since 2026-04: US-MD-1, CA-MTL-4, US-NC-2.
   default = [
-    "US-MD-1",
+    "US-DE-1",
     "CA-MTL-1",
+    "CA-MTL-2",
     "CA-MTL-3",
-    "CA-MTL-4",
     "US-NC-1",
-    "US-NC-2",
     "US-IL-1",
+    "US-GA-1",
     "US-GA-2",
     "US-KS-2",
+    "US-KS-3",
+    "US-TX-1",
     "US-TX-3",
     "US-TX-4",
     "US-CA-2",
@@ -93,4 +97,14 @@ variable "ssh_public_key" {
   type        = string
   description = "ssh-ed25519 line for RunPod; injected as PUBLIC_KEY for root SSH on TCP 22"
   default     = ""
+}
+
+variable "swap_model_type" {
+  type        = string
+  description = "Which swap model the pod bootstrap downloads / app.py loads. 'hyperswap' = FaceFusion hyperswap_1a_256.onnx (current SOTA, 256x256 crop). 'inswapper' = legacy InsightFace inswapper_128.onnx."
+  default     = "hyperswap"
+  validation {
+    condition     = contains(["hyperswap", "inswapper"], var.swap_model_type)
+    error_message = "swap_model_type must be 'hyperswap' or 'inswapper'."
+  }
 }
