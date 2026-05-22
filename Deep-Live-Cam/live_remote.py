@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """Headless live webcam face-swap (local CoreML or remote RunPod GPU).
 
-Pipeline:
-  capture (main)
-    -> detect_q (maxsize=1, drop-on-full)
-    -> single detector thread (one CoreML detection session)
-    -> swap_q (maxsize=workers, drop-on-full)
-    -> N swap workers (parallel inswapper + optional eye passthrough)
-    -> result_q (tagged with monotonic frame id)
-  display (main): drains result_q; only paints results whose id is newer than
-  the last painted id, so out-of-order completions never regress the frame.
+Decoupled pipeline so display rate doesn't get pinned to swap rate:
+  - Main: capture frame -> dispatch to detect_q -> composite using
+    latest_face + latest_crop -> display + OBS Virtual Camera. Runs at the
+    camera's native rate (~30 fps).
+  - Detector thread: pops from detect_q at its own rate (~10-15 fps with
+    CoreML); writes the latest Face position to shared state.
+  - Swap workers (N): pop face+frame at their rate (limited by backend —
+    RunPod proxy caps at ~4 req/s, local CoreML HyperSwap at ~1.5 req/s);
+    compute just the aligned swap *crop* (no paste-back) and write it to
+    shared state.
+  - Composite step uses CURRENT detection + LATEST crop, so the face
+    position tracks your live motion while the swap content updates at
+    whatever rate the backend supports. Eliminates the "swap pasted at an
+    old position" lag that pinned us to swap_rate display.
 
 Usage (after sourcing env.remote so DLC_REMOTE_SWAP_URL / DLC_REMOTE_SWAP_API_KEY are set):
     venv/bin/python live_remote.py --source media/sources/user_source.jpg --mirror [--workers 3]
@@ -120,8 +125,11 @@ class LocalSwapper:
         img = np.clip(img, 0.0, 1.0)
         return (img[:, :, ::-1] * 255.0).astype(np.uint8)
 
-    def swap(self, source_face, target_face, frame: np.ndarray) -> np.ndarray:
-        aimg, M = self._face_align.norm_crop2(frame, target_face.kps, self.input_size)
+    def compute_crop(self, source_face, target_face, frame: np.ndarray) -> np.ndarray:
+        """Run inference only — return the aligned swapped crop (HxWx3 uint8 BGR).
+        Caller is responsible for pasting it back into the target frame.
+        """
+        aimg, _M = self._face_align.norm_crop2(frame, target_face.kps, self.input_size)
         feeds = {}
         for n in self.input_names:
             if n == "target":
@@ -131,21 +139,36 @@ class LocalSwapper:
             else:
                 raise RuntimeError(f"unknown ONNX input name {n!r}")
         pred = self.session.run(self.output_names, feeds)[0]
-        bgr_fake = self._postprocess(pred)
+        return self._postprocess(pred)
 
-        # Paste the swapped crop back into the full frame via inverse affine.
-        h, w = frame.shape[:2]
-        M_inv = cv2.invertAffineTransform(M)
-        warped = cv2.warpAffine(bgr_fake, M_inv, (w, h), borderValue=(0, 0, 0))
-        # Soft mask: full opacity in the crop, eroded + blurred at the edges so the
-        # paste seam isn't visible.
-        m = np.full((self.input_size, self.input_size), 255, dtype=np.uint8)
-        m = cv2.erode(m, np.ones((15, 15), np.uint8))
-        m = cv2.GaussianBlur(m, (25, 25), 0)
-        warped_mask = cv2.warpAffine(m, M_inv, (w, h))
-        alpha = (warped_mask.astype(np.float32) / 255.0)[:, :, None]
-        return (frame.astype(np.float32) * (1 - alpha) +
-                warped.astype(np.float32) * alpha).astype(np.uint8)
+    def swap(self, source_face, target_face, frame: np.ndarray) -> np.ndarray:
+        """Compute crop + paste into the same frame. Convenience wrapper."""
+        crop = self.compute_crop(source_face, target_face, frame)
+        return paste_swap_crop(crop, target_face.kps, frame, self.input_size, self._face_align)
+
+
+def paste_swap_crop(crop: np.ndarray, target_kps, dest_frame: np.ndarray,
+                    input_size: int, face_align_mod) -> np.ndarray:
+    """Paste an aligned swap crop onto `dest_frame` at the face position given
+    by target_kps. The crop was generated for the arcface-128 template, so the
+    inverse of `norm_crop2(dest_frame, target_kps, input_size)`'s M maps it back.
+
+    Crucially, this allows reusing a swap crop on a NEW frame whose face has
+    moved since the swap was computed — the face *position* tracks the new
+    detection, while the swap *content* is whatever the latest backend returned.
+    """
+    h, w = dest_frame.shape[:2]
+    _aimg, M_dest = face_align_mod.norm_crop2(dest_frame, target_kps, input_size)
+    M_inv = cv2.invertAffineTransform(M_dest)
+    warped = cv2.warpAffine(crop, M_inv, (w, h), borderValue=(0, 0, 0))
+    # Soft mask: full opacity in the crop, eroded + blurred so the seam isn't visible.
+    m = np.full((input_size, input_size), 255, dtype=np.uint8)
+    m = cv2.erode(m, np.ones((15, 15), np.uint8))
+    m = cv2.GaussianBlur(m, (25, 25), 0)
+    warped_mask = cv2.warpAffine(m, M_inv, (w, h))
+    alpha = (warped_mask.astype(np.float32) / 255.0)[:, :, None]
+    return (dest_frame.astype(np.float32) * (1 - alpha) +
+            warped.astype(np.float32) * alpha).astype(np.uint8)
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, THIS_DIR)
@@ -354,12 +377,31 @@ def main() -> int:
         return 2
 
     stop_event = threading.Event()
-    # Pipeline: capture -> detect_q -> 1 detector -> swap_q -> N swap workers -> result_q.
-    # Each bounded queue uses drop-on-full so the live preview shows fresh frames
-    # even when downstream stages can't keep up.
+    # Decoupled pipeline:
+    #   - Main thread: capture + composite + display at native camera rate (~30 fps).
+    #   - Detector thread: pops capture frames at its own rate (~10-15 fps on CoreML),
+    #     publishes face position via `shared`.
+    #   - Swap workers: pop face+frame at their own rate (~4 fps with remote, ~6 fps
+    #     local), publish the swap crop via `shared`.
+    #   - Main composites every captured frame using the LATEST face position + the
+    #     LATEST swap crop, so display always tracks current head motion even when
+    #     the swap content is a few hundred ms stale. This sidesteps the proxy/GPU
+    #     throughput ceiling: visual smoothness ≠ swap update rate.
     detect_q: queue.Queue = queue.Queue(maxsize=1)
     swap_q: queue.Queue = queue.Queue(maxsize=args.workers)
-    result_q: queue.Queue = queue.Queue()
+
+    # Threads update fields below; main composites against them every frame.
+    from insightface.utils import face_align as _face_align_mod
+    state_lock = threading.Lock()
+    shared = {
+        "face": None,         # most-recent Face from detector
+        "face_t": 0.0,
+        "crop": None,         # most-recent swap crop (HxWx3 uint8)
+        "crop_t": 0.0,
+        "input_size": (local_swapper.input_size if local_swapper is not None
+                       else int(os.environ.get("DLC_REMOTE_SWAP_INPUT_SIZE",
+                                               "128" if args.backend == "local" else "256"))),
+    }
 
     def _put_drop_oldest(q: queue.Queue, item) -> None:
         try:
@@ -386,7 +428,12 @@ def main() -> int:
             t0 = time.time()
             face = get_one_face(frame)
             t1 = time.time()
-            _put_drop_oldest(swap_q, (fid, frame, face, t_cap))
+            with state_lock:
+                shared["face"] = face
+                shared["face_t"] = t1
+            # Dispatch a swap job using this frame+face if there's room.
+            if face is not None:
+                _put_drop_oldest(swap_q, (fid, frame, face))
             n += 1
             if args.timing and (n <= 5 or n % 30 == 0):
                 state = "face" if face is not None else "noface"
@@ -399,33 +446,31 @@ def main() -> int:
         n = 0
         while not stop_event.is_set():
             try:
-                fid, frame, face, t_cap = swap_q.get(timeout=0.1)
+                fid, frame, face = swap_q.get(timeout=0.1)
             except queue.Empty:
                 continue
             t0 = time.time()
-            if face is None:
-                out = frame
-                t1 = t2 = t0
-            else:
-                try:
-                    if local_swapper is not None:
-                        out = local_swapper.swap(source_face, face, frame)
-                    else:
-                        out = swap_face(source_face, face, frame)
-                    t1 = time.time()
-                    if args.eye_passthrough:
-                        out = passthrough_eyes(out, frame, face, expand=args.eye_expand)
-                    t2 = time.time()
-                except Exception as e:
-                    print(f"[w{idx}] swap error: {e}", file=sys.stderr)
-                    out = frame
-                    t1 = t2 = time.time()
-            result_q.put((fid, out, t_cap))
+            try:
+                if local_swapper is not None:
+                    crop = local_swapper.compute_crop(source_face, face, frame)
+                else:
+                    # Remote backend: align crop ourselves, ship to pod, get crop back.
+                    input_size = shared["input_size"]
+                    aimg, _ = _face_align_mod.norm_crop2(frame, face.kps, input_size)
+                    from modules.remote_swap_client import remote_swap_aligned
+                    crop = remote_swap_aligned(aimg, source_face.normed_embedding)
+            except Exception as e:
+                print(f"[w{idx}] swap error: {e}", file=sys.stderr)
+                crop = None
+            t1 = time.time()
+            if crop is not None:
+                with state_lock:
+                    shared["crop"] = crop
+                    shared["crop_t"] = t1
             n += 1
             if args.timing and (n <= 5 or n % 30 == 0):
                 print(
-                    f"[w{idx} f{n:>3}] swap {(t1-t0)*1000:6.0f}ms  "
-                    f"eyes {(t2-t1)*1000:5.0f}ms  total {(t2-t0)*1000:6.0f}ms",
+                    f"[w{idx} f{n:>3}] swap {(t1-t0)*1000:6.0f}ms",
                     file=sys.stderr, flush=True,
                 )
 
@@ -440,18 +485,16 @@ def main() -> int:
     print("[live] press q to quit")
 
     next_fid = 0
-    last_displayed_id = -1  # synchronizer cursor: never paint an older result on top
-    last_displayed_frame = None
 
     # Metrics windows
     win_t = time.time()
-    cap_n = 0       # frames captured this window
-    swap_n = 0      # results painted this window
-    drop_n = 0      # results dropped because stale this window
-    latencies = []  # capture->paint latency for painted results
+    cap_n = 0           # frames captured this window
+    swap_seen_t = 0.0   # last shared['crop_t'] we observed -> swap rate
+    swap_seen_n = 0
+    last_swap_t_observed = 0.0
     cap_fps = swap_fps = 0.0
-    avg_lat_ms = 0.0
-    dropped_total = 0
+    avg_crop_age_ms = 0.0
+    crop_ages = []
 
     try:
         while True:
@@ -467,54 +510,62 @@ def main() -> int:
             next_fid += 1
             _put_drop_oldest(detect_q, (fid, frame, t_cap))
 
-            # Drain all available results; synchronizer keeps only the newest one.
-            painted_this_tick = False
-            while True:
+            # Snapshot shared state; composite on the *current* frame using the
+            # latest detected face position + the latest swap crop.
+            with state_lock:
+                cur_face = shared["face"]
+                cur_face_t = shared["face_t"]
+                cur_crop = shared["crop"]
+                cur_crop_t = shared["crop_t"]
+                cur_input_size = shared["input_size"]
+
+            if cur_face is not None and cur_crop is not None:
                 try:
-                    rfid, rframe, r_tcap = result_q.get_nowait()
-                except queue.Empty:
-                    break
-                if rfid <= last_displayed_id:
-                    drop_n += 1
-                    dropped_total += 1
-                    continue
-                last_displayed_id = rfid
-                last_displayed_frame = rframe
-                latencies.append(time.time() - r_tcap)
-                swap_n += 1
-                painted_this_tick = True
+                    display = paste_swap_crop(cur_crop, cur_face.kps, frame,
+                                              cur_input_size, _face_align_mod)
+                    if args.eye_passthrough:
+                        display = passthrough_eyes(display, frame, cur_face,
+                                                   expand=args.eye_expand)
+                    crop_ages.append(time.time() - cur_crop_t)
+                except Exception as e:
+                    print(f"[composite] {e}", file=sys.stderr)
+                    display = frame.copy()
+            else:
+                display = frame.copy()
 
-            display = (last_displayed_frame if last_displayed_frame is not None else frame).copy()
+            # Count unique swap completions for the HUD.
+            if cur_crop_t != last_swap_t_observed:
+                swap_seen_n += 1
+                last_swap_t_observed = cur_crop_t
 
-            # Publish the same image we're showing locally to the virtual camera
-            # (Zoom/Meet etc. will see this stream). No-op if disabled / unavailable.
+            # Publish to OBS Virtual Camera (Zoom/Meet pick this as their input).
             vcam_send(display)
 
             now = time.time()
             if now - win_t >= 1.0:
                 cap_fps = cap_n / (now - win_t)
-                swap_fps = swap_n / (now - win_t)
-                if latencies:
-                    avg_lat_ms = 1000.0 * (sum(latencies) / len(latencies))
+                swap_fps = swap_seen_n / (now - win_t)
+                if crop_ages:
+                    avg_crop_age_ms = 1000.0 * (sum(crop_ages) / len(crop_ages))
                 win_t = now
-                cap_n = swap_n = drop_n = 0
-                latencies = []
+                cap_n = swap_seen_n = 0
+                crop_ages = []
 
-                # Tell the audio delayer the new target. Floor it so brief video
-                # stalls don't briefly push audio ahead of the swap.
+                # Audio delayer tracks the swap-content age (since lip-sync depends
+                # on the painted content, not just paint rate).
                 if audio_delayer is not None:
                     if args.audio_delay_ms is not None:
                         target_ms = args.audio_delay_ms
                     else:
-                        target_ms = max(args.audio_delay_floor_ms, avg_lat_ms)
+                        target_ms = max(args.audio_delay_floor_ms, avg_crop_age_ms)
                     audio_delayer.set_target_delay_ms(target_ms)
 
             hud_audio = ""
             if audio_delayer is not None:
                 hud_audio = f"  audio:{audio_delayer.current_delay_ms:.0f}ms"
             hud = (f"{args.backend} | swap {swap_fps:4.1f} fps  cam {cap_fps:4.1f} fps  "
-                   f"lat {avg_lat_ms:5.0f}ms  w{args.workers}  drops {dropped_total}"
-                   f"  eyes:{'on' if args.eye_passthrough else 'off'}{hud_audio}")
+                   f"crop-age {avg_crop_age_ms:5.0f}ms  w{args.workers}  "
+                   f"eyes:{'on' if args.eye_passthrough else 'off'}{hud_audio}")
             cv2.putText(display, hud, (12, 28), cv2.FONT_HERSHEY_SIMPLEX,
                         0.55, (0, 255, 0), 2, cv2.LINE_AA)
             cv2.imshow(win, display)
