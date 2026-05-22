@@ -164,6 +164,10 @@ def main() -> int:
     ap.add_argument("--mirror", action="store_true", help="horizontally flip the preview")
     ap.add_argument("--backend", choices=["remote", "local"], default="remote",
                     help="remote = RunPod /v1/swap (needs env.remote); local = on-device CoreML/CUDA")
+    ap.add_argument("--remote-protocol", choices=["http", "ws"], default="ws",
+                    help="remote wire protocol. 'ws' (default) holds a persistent binary "
+                         "WebSocket per worker — eliminates per-request multipart + HTTP "
+                         "overhead. 'http' is the older POST /v1/swap path.")
     ap.add_argument("--workers", type=int, default=None,
                     help="parallel swap workers; default 3 for remote, 1 for local")
     ap.add_argument("--no-eye-passthrough", action="store_true",
@@ -214,6 +218,8 @@ def main() -> int:
             print("DLC_REMOTE_SWAP_URL not set — source env.remote first, "
                   "or pass --backend local.", file=sys.stderr)
             return 2
+        # Picked up by modules.remote_swap_client to choose ws vs http.
+        os.environ["DLC_REMOTE_SWAP_PROTOCOL"] = args.remote_protocol
 
     if args.workers is None:
         # Remote: scale wins because network RTT dominates; 3 workers ~3x throughput.

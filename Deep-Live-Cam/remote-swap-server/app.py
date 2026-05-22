@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 import onnx
 import onnxruntime as ort
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from onnx import numpy_helper
 
@@ -155,6 +155,40 @@ def _postprocess(pred: np.ndarray) -> np.ndarray:
     return (img[:, :, ::-1] * 255.0).astype(np.uint8)
 
 
+def _do_swap(width: int, height: int, raw_img: bytes, raw_emb: bytes) -> bytes:
+    """Core swap path shared by HTTP and WebSocket. Returns raw BGR bytes.
+
+    Raises ValueError on validation failure (callers translate to their protocol's
+    error code).
+    """
+    if _session is None:
+        raise RuntimeError("Model not loaded")
+    expected_len = width * height * 3
+    if len(raw_img) != expected_len:
+        raise ValueError(f"aligned_bgr bytes {len(raw_img)} != width*height*3={expected_len}")
+    exp_h, exp_w = _input_size_hw
+    if width != exp_w or height != exp_h:
+        raise ValueError(f"Expected aligned crop {exp_w}x{exp_h}, got {width}x{height}")
+
+    emb = np.frombuffer(raw_emb, dtype=np.float32)
+    if emb.size < 512:
+        raise ValueError("embedding must be at least 512 float32 values")
+    aimg = np.frombuffer(raw_img, dtype=np.uint8).reshape((height, width, 3))
+
+    blob = _prepare_image(aimg)
+    source = _prepare_source(emb)
+    feeds = {}
+    for n in _input_names:
+        if n == "target":
+            feeds[n] = blob
+        elif n == "source":
+            feeds[n] = source
+        else:
+            raise RuntimeError(f"Unknown ONNX input name {n!r}")
+    pred = _session.run(_output_names, feeds)[0]
+    return _postprocess(pred).tobytes()
+
+
 @app.post("/v1/swap")
 def swap(
     authorization: Annotated[Optional[str], Header()] = None,
@@ -164,45 +198,65 @@ def swap(
     embedding: UploadFile = File(...),
 ) -> Response:
     _verify_bearer(authorization)
-    if _session is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    try:
+        out = _do_swap(width, height, aligned_bgr.file.read(), embedding.file.read())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return Response(content=out, media_type="application/octet-stream")
 
-    raw_img = aligned_bgr.file.read()
-    raw_emb = embedding.file.read()
 
-    expected_len = width * height * 3
-    if len(raw_img) != expected_len:
-        raise HTTPException(
-            status_code=400,
-            detail=f"aligned_bgr bytes {len(raw_img)} != width*height*3={expected_len}",
-        )
+# --- WebSocket binary protocol -------------------------------------------------
+# Wire format per request (one binary frame from client):
+#   bytes 0..3   : uint32 LE width
+#   bytes 4..7   : uint32 LE height
+#   bytes 8..7+E : float32[N>=512] embedding (E = 4*N bytes)
+#   trailing    : width*height*3 bytes uint8 BGR aligned crop
+# Header has a single uint32 LE that gives the embedding-byte-length, followed
+# by the embedding bytes, then the image bytes. Concretely:
+#   [u32 w][u32 h][u32 emb_bytes][emb_bytes float32][w*h*3 uint8 bgr]
+# Response is one binary frame: width*height*3 bytes uint8 BGR.
+# Auth is sent ONCE in the handshake's `Authorization: Bearer …` header; no
+# per-message overhead.
 
-    exp_h, exp_w = _input_size_hw
-    if width != exp_w or height != exp_h:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Expected aligned crop {exp_w}x{exp_h}, got {width}x{height}",
-        )
+_WS_HEADER = "<III"  # struct format: 3 little-endian uint32
 
-    emb = np.frombuffer(raw_emb, dtype=np.float32)
-    if emb.size < 512:
-        raise HTTPException(status_code=400, detail="embedding must be at least 512 float32 values")
 
-    aimg = np.frombuffer(raw_img, dtype=np.uint8).reshape((height, width, 3))
+@app.websocket("/v1/ws/swap")
+async def swap_ws(ws: WebSocket) -> None:
+    # Verify the same bearer header the HTTP endpoint uses, before upgrading.
+    auth = ws.headers.get("authorization")
+    try:
+        _verify_bearer(auth)
+    except HTTPException as e:
+        # Refuse the upgrade with HTTP-like status. FastAPI's WebSocket close
+        # codes are limited; 4401 = our custom "unauthorized".
+        await ws.close(code=4401, reason=e.detail)
+        return
 
-    blob = _prepare_image(aimg)
-    source = _prepare_source(emb)
+    await ws.accept()
+    try:
+        while True:
+            buf = await ws.receive_bytes()
+            try:
+                import struct
 
-    # Map by tensor name so we work with any input ordering.
-    feeds = {}
-    for n in _input_names:
-        if n == "target":
-            feeds[n] = blob
-        elif n == "source":
-            feeds[n] = source
-        else:
-            raise HTTPException(status_code=500, detail=f"Unknown ONNX input name {n!r}")
-
-    pred = _session.run(_output_names, feeds)[0]
-    bgr_fake = _postprocess(pred)
-    return Response(content=bgr_fake.tobytes(), media_type="application/octet-stream")
+                if len(buf) < struct.calcsize(_WS_HEADER):
+                    raise ValueError(f"frame too short ({len(buf)} bytes)")
+                w, h, emb_bytes = struct.unpack_from(_WS_HEADER, buf, 0)
+                off = struct.calcsize(_WS_HEADER)
+                if len(buf) < off + emb_bytes + w * h * 3:
+                    raise ValueError(
+                        f"frame size {len(buf)} != expected {off + emb_bytes + w*h*3}"
+                    )
+                raw_emb = bytes(buf[off : off + emb_bytes])
+                raw_img = bytes(buf[off + emb_bytes : off + emb_bytes + w * h * 3])
+                out = _do_swap(w, h, raw_img, raw_emb)
+                await ws.send_bytes(out)
+            except (ValueError, RuntimeError) as e:
+                # Send a small text error so the client can decide whether to
+                # reconnect or surface the problem; doesn't tear down the socket.
+                await ws.send_text(f"error: {e}")
+    except WebSocketDisconnect:
+        return
