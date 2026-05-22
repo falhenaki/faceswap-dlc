@@ -82,4 +82,9 @@ done
 python3 -m pip uninstall -y onnxruntime 2>/dev/null || true
 python3 -m pip install -q -r "$ROOT/requirements.txt"
 python3 -c "import onnxruntime as _o; print('[bootstrap] ORT providers', _o.get_available_providers())"
-exec python3 -m uvicorn app:app --host 0.0.0.0 --port "${PORT}" --workers 1
+# Uvicorn worker count: each worker is its own Python process with its own ORT
+# session, so this is how we scale GPU concurrency. Pod has 48GB+ VRAM so 4 small
+# (~400MB) ONNX sessions fit easily. Single-worker pinned the throughput to ~2
+# req/s due to GIL contention on the synchronous swap endpoint.
+UVICORN_WORKERS="${UVICORN_WORKERS:-4}"
+exec python3 -m uvicorn app:app --host 0.0.0.0 --port "${PORT}" --workers "${UVICORN_WORKERS}"
