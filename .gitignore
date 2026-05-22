@@ -5,6 +5,11 @@
 **/terraform.tfvars
 **/crash.log
 **/env.remote
+**/env.remote.bak
+**/env.remote.bak.*
+# Personal source-face images used for local testing; keep out of public history.
+**/Deep-Live-Cam/media/sources/
+**/.claude/
 **/.venv/
 **/venv/
 .tools/

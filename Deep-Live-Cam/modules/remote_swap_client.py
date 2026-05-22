@@ -3,12 +3,33 @@
 from __future__ import annotations
 
 import os
+import threading
 from typing import Optional
 
 import numpy as np
 import requests
+from requests.adapters import HTTPAdapter
 
 from modules.typing import Frame
+
+# A pooled session reuses the TLS connection across swap calls; without it,
+# each frame pays a fresh TCP+TLS handshake to the RunPod proxy (~250ms).
+_SESSION: Optional[requests.Session] = None
+_SESSION_LOCK = threading.Lock()
+
+
+def _get_session() -> requests.Session:
+    global _SESSION
+    if _SESSION is None:
+        with _SESSION_LOCK:
+            if _SESSION is None:
+                s = requests.Session()
+                # Enough pool capacity for several parallel swap workers.
+                adapter = HTTPAdapter(pool_connections=8, pool_maxsize=16)
+                s.mount("https://", adapter)
+                s.mount("http://", adapter)
+                _SESSION = s
+    return _SESSION
 
 
 def remote_swap_aligned(
@@ -34,7 +55,7 @@ def remote_swap_aligned(
     emb = np.ascontiguousarray(normed_embedding.astype(np.float32))
 
     try:
-        r = requests.post(
+        r = _get_session().post(
             f"{base}/v1/swap",
             headers={"Authorization": f"Bearer {key}"},
             data={"width": str(w), "height": str(h)},
