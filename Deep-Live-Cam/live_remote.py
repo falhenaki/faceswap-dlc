@@ -144,31 +144,76 @@ class LocalSwapper:
     def swap(self, source_face, target_face, frame: np.ndarray) -> np.ndarray:
         """Compute crop + paste into the same frame. Convenience wrapper."""
         crop = self.compute_crop(source_face, target_face, frame)
-        return paste_swap_crop(crop, target_face.kps, frame, self.input_size, self._face_align)
+        return paste_swap_crop(crop, target_face, frame, self.input_size, self._face_align)
 
 
-def paste_swap_crop(crop: np.ndarray, target_kps, dest_frame: np.ndarray,
+def paste_swap_crop(crop: np.ndarray, target_face, dest_frame: np.ndarray,
                     input_size: int, face_align_mod) -> np.ndarray:
     """Paste an aligned swap crop onto `dest_frame` at the face position given
-    by target_kps. The crop was generated for the arcface-128 template, so the
-    inverse of `norm_crop2(dest_frame, target_kps, input_size)`'s M maps it back.
+    by target_face.kps. Uses a face-shaped mask (built from target_face's 106
+    landmarks) so the seam follows the jawline+forehead rather than a square.
 
-    Crucially, this allows reusing a swap crop on a NEW frame whose face has
-    moved since the swap was computed — the face *position* tracks the new
-    detection, while the swap *content* is whatever the latest backend returned.
+    The crop was generated for the arcface-128 template, so the inverse of
+    `norm_crop2(dest_frame, target_kps, input_size)`'s M maps it back.
     """
     h, w = dest_frame.shape[:2]
-    _aimg, M_dest = face_align_mod.norm_crop2(dest_frame, target_kps, input_size)
+    _aimg, M_dest = face_align_mod.norm_crop2(dest_frame, target_face.kps, input_size)
     M_inv = cv2.invertAffineTransform(M_dest)
     warped = cv2.warpAffine(crop, M_inv, (w, h), borderValue=(0, 0, 0))
-    # Soft mask: full opacity in the crop, eroded + blurred so the seam isn't visible.
-    m = np.full((input_size, input_size), 255, dtype=np.uint8)
-    m = cv2.erode(m, np.ones((15, 15), np.uint8))
-    m = cv2.GaussianBlur(m, (25, 25), 0)
-    warped_mask = cv2.warpAffine(m, M_inv, (w, h))
-    alpha = (warped_mask.astype(np.float32) / 255.0)[:, :, None]
+
+    # Face-shaped mask from 106-point landmarks (convex hull of jaw + forehead
+    # estimate, gaussian-blurred for a soft seam). Built directly in frame
+    # coords from the current detection — no warp needed.
+    mask = _build_face_mask(target_face, h, w)
+    # AND it with the warped crop's footprint so we don't try to blend pixels
+    # the warpAffine left as black border.
+    crop_footprint = cv2.warpAffine(
+        np.full((input_size, input_size), 255, dtype=np.uint8),
+        M_inv, (w, h),
+    )
+    mask = cv2.bitwise_and(mask, crop_footprint)
+
+    alpha = (mask.astype(np.float32) / 255.0)[:, :, None]
     return (dest_frame.astype(np.float32) * (1 - alpha) +
             warped.astype(np.float32) * alpha).astype(np.uint8)
+
+
+def _build_face_mask(face, h: int, w: int, blur: int = 31) -> np.ndarray:
+    """Soft mask of the face region using insightface's 106-point landmarks
+    (convex hull of jawline 0-32 + an estimated forehead row above the eyebrows).
+    Mirrors DLC's create_face_mask, lifted inline to keep this module dep-light.
+    """
+    mask = np.zeros((h, w), dtype=np.uint8)
+    lm = getattr(face, "landmark_2d_106", None)
+    if lm is None or not isinstance(lm, np.ndarray) or lm.shape[0] < 106:
+        return mask
+    if not np.all(np.isfinite(lm)):
+        return mask
+    try:
+        landmarks_int = lm.astype(np.int32)
+        face_outline = landmarks_int[0:33]
+        eyebrows = landmarks_int[33:43]
+        if eyebrows.shape[0] > 0:
+            chin = landmarks_int[16]
+            eyebrow_center = np.mean(eyebrows, axis=0).astype(np.int32)
+            up_vector = eyebrow_center - chin
+            norm = float(np.linalg.norm(up_vector))
+            if norm > 0:
+                up_vector = up_vector.astype(np.float32) / norm
+                forehead_offset = up_vector * (norm * 1.0)
+                forehead_points = (eyebrows + forehead_offset).astype(np.int32)
+                top_center = np.mean(forehead_points, axis=0).astype(np.int32)
+                forehead_points = ((forehead_points - top_center) * 1.2 + top_center).astype(np.int32)
+                face_outline = np.concatenate((face_outline, forehead_points), axis=0)
+        hull = cv2.convexHull(face_outline.astype(np.float32))
+        if hull is None or len(hull) < 3:
+            return mask
+        cv2.fillConvexPoly(mask, hull.astype(np.int32), 255)
+        k = max(1, blur // 2 * 2 + 1)
+        mask = cv2.GaussianBlur(mask, (k, k), 0)
+    except Exception as e:
+        print(f"[face_mask] {e}", file=sys.stderr)
+    return mask
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, THIS_DIR)
@@ -521,7 +566,7 @@ def main() -> int:
 
             if cur_face is not None and cur_crop is not None:
                 try:
-                    display = paste_swap_crop(cur_crop, cur_face.kps, frame,
+                    display = paste_swap_crop(cur_crop, cur_face, frame,
                                               cur_input_size, _face_align_mod)
                     if args.eye_passthrough:
                         display = passthrough_eyes(display, frame, cur_face,
